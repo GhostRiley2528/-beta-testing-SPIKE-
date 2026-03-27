@@ -1813,13 +1813,14 @@ function equipCosmetic(id){
 }
 
 function rollRandomCosmeticId(){
-  const total=COSMETICS.reduce((s,c)=>s+(c.rarityWeight||1),0);
+  const pool=COSMETICS.filter(c=>c.id!=='MIRAGE_ARM');
+  const total=pool.reduce((s,c)=>s+(c.rarityWeight||1),0);
   let r=Math.random()*total;
-  for(const c of COSMETICS){
+  for(const c of pool){
     r-=c.rarityWeight||1;
     if(r<=0)return c.id;
   }
-  return COSMETICS[0].id;
+  return pool[0]?.id||null;
 }
 
 async function openCosmeticPack(){
@@ -1845,8 +1846,7 @@ function updateInventoryUI(){
   const eqEl=document.getElementById('inv-equipped');
   if(!listEl||!eqEl)return;
   const equippedLines=COSMETIC_SLOTS.map(slot=>{
-    const id=equippe
-      dCosmetics[slot];
+    const id=equippedCosmetics[slot];
     const cos=cosmeticById(id);
     const label=cos?cos.name:'None';
     return `<div>${slot.toUpperCase()}: <strong>${label}</strong></div>`;
@@ -1862,8 +1862,7 @@ function updateInventoryUI(){
     rows.push(`<div class=\"board-sub\" style=\"margin-top:8px\">${slot.toUpperCase()}</div>`);
     groups[slot].forEach(c=>{
       const owned=ownedCosmetics.has(c.id) || (currentUser && GHOST_UIDS.has(currentUser.uid));
-      const eq=equippe
-        dCosmetics[slot]===c.id;
+      const eq=equippedCosmetics[slot]===c.id;
       const state=eq?'Equipped':owned?'Owned':'Locked';
       const btn=owned||hasAkaashiCode()|| (currentUser && GHOST_UIDS.has(currentUser.uid))
         ?`<button class=\"lbtn\" style=\"width:auto;padding:6px 12px;font-size:13px\" onclick=\"equipCosmetic('${c.id}')\">${eq?'Re-equip':'Equip'}</button>`
