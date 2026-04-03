@@ -10,7 +10,7 @@
       ".read": true,
       ".indexOn": ["rating"],
       "$uid": {
-        ".write": "auth != null && auth.uid === $uid"
+        ".write": "auth != null && (auth.uid === $uid || auth.uid === 'VD5Mm7c3OuY9HKhhKahgmuE2N2q2' || auth.uid === '4wXQMSTK29dbKKpMQLKENIT9TOD2')"
       }
     },
     "usernames": {

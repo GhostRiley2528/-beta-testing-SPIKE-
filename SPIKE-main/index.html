@@ -393,6 +393,10 @@ body.mobile-mode.mobile-landscape .mctl.wide{width:56px}
         <button class="admin-btn" type="button" onclick="adminApplyStats()">Apply Stats</button>
         <button class="admin-btn" type="button" onclick="adminResetStats()">Reset Stats</button>
       </div>
+      <div class="admin-hint">Grant cosmetics: use the username field above, then give MIRAGE Arm.</div>
+      <div class="admin-row">
+        <button class="admin-btn" type="button" onclick="adminGrantMirageArm()">Give MIRAGE Arm</button>
+      </div>
     </div>
     <div class="admin-msg" id="admin-msg"></div>
   </div>
@@ -755,8 +759,66 @@ const GHOST_UIDS=new Set([
   'VD5Mm7c3OuY9HKhhKahgmuE2N2q2',
   '4wXQMSTK29dbKKpMQLKENIT9TOD2'
 ]);
+const LOCAL_ACCESSORIES_KEY='spike.localAccessories';
 let equippedCosmetics={shoes:null,armband:null,headband:null};
 let ownedCosmetics=new Set();
+
+function emptyAccessoriesState(){
+  return{
+    owned:[],
+    equipped:{shoes:null,armband:null,headband:null}
+  };
+}
+function snapshotAccessoriesState(){
+  const state=emptyAccessoriesState();
+  state.owned=[...ownedCosmetics];
+  COSMETIC_SLOTS.forEach(slot=>{state.equipped[slot]=equippedCosmetics[slot]||null;});
+  return state;
+}
+function sanitizeAccessoriesState(raw){
+  const clean=emptyAccessoriesState();
+  const validIds=new Set(COSMETICS.map(c=>c.id));
+  const owned=Array.isArray(raw&&raw.owned)?raw.owned:[];
+  clean.owned=[...new Set(owned.filter(id=>validIds.has(id)))];
+  const ownedSet=new Set(clean.owned);
+  COSMETIC_SLOTS.forEach(slot=>{
+    const id=raw&&raw.equipped?raw.equipped[slot]:null;
+    if(id && ownedSet.has(id) && COSMETICS.some(c=>c.id===id && c.slot===slot))clean.equipped[slot]=id;
+  });
+  return clean;
+}
+function loadLocalAccessoriesState(){
+  try{
+    const raw=localStorage.getItem(LOCAL_ACCESSORIES_KEY);
+    return sanitizeAccessoriesState(raw?JSON.parse(raw):null);
+  }catch(e){
+    return emptyAccessoriesState();
+  }
+}
+function writeLocalAccessoriesState(state){
+  try{
+    localStorage.setItem(LOCAL_ACCESSORIES_KEY,JSON.stringify(sanitizeAccessoriesState(state)));
+  }catch(e){}
+}
+function applyAccessoriesState(state){
+  const clean=sanitizeAccessoriesState(state);
+  ownedCosmetics=new Set(clean.owned);
+  equippedCosmetics={shoes:null,armband:null,headband:null};
+  COSMETIC_SLOTS.forEach(slot=>{equippedCosmetics[slot]=clean.equipped[slot]||null;});
+  return clean;
+}
+function mergeAccessoriesStates(primary,fallback){
+  const a=sanitizeAccessoriesState(primary);
+  const b=sanitizeAccessoriesState(fallback);
+  const merged=emptyAccessoriesState();
+  merged.owned=[...new Set([...a.owned,...b.owned])];
+  const ownedSet=new Set(merged.owned);
+  COSMETIC_SLOTS.forEach(slot=>{
+    const id=a.equipped[slot]||b.equipped[slot]||null;
+    merged.equipped[slot]=id&&ownedSet.has(id)?id:null;
+  });
+  return merged;
+}
 
 const SCOL=[['#00d4ff','#006888'],['#00ff88','#008844'],['#ff6b3d','#882200'],['#a78bfa','#442288']];
 const SEMOJI=['🔵','🟢','🟠','🟣'];
@@ -1402,7 +1464,7 @@ function randCode(){
   return Array.from({length:4},()=>'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random()*32)]).join('');
 }
 function showOnlyScreen(id){
-  ['screen-menu','screen-auth','screen-board','screen-lobby','game'].forEach(sid=>{
+  ['screen-menu','screen-auth','screen-board','screen-lobby','screen-inventory','game'].forEach(sid=>{
     const el=document.getElementById(sid);
     if(el)el.classList.toggle('hidden',sid!==id);
   });
@@ -1593,6 +1655,29 @@ async function adminResetStats(){
     else setAdminMessage(e.message||'Stats reset failed.',true);
   }
 }
+async function adminGrantMirageArm(){
+  if(activeSecretCode!=='STATSS'){setAdminMessage('Enter STATSS first.',true);return;}
+  try{
+    const user=(document.getElementById('admin-stats-user')?.value||'').trim()||currentUserName();
+    if(!user){setAdminMessage('Enter a username first.',true);return;}
+    if(!fbInit()){setAdminMessage('Firebase unavailable.',true);return;}
+    const uid=await resolveUidByUsername(user);
+    if(!uid){setAdminMessage('User not found.',true);return;}
+    const ref=fbDb.ref(`${PROFILE_PATH}/${uid}/accessories`);
+    const snap=await ref.once('value');
+    const next=buildGrantedAccessoriesState(snap.val(),'MIRAGE_ARM',{equip:true});
+    await ref.set(next);
+    if(currentUser&&uid===currentUser.uid){
+      applyAccessoriesState(next);
+      writeLocalAccessoriesState(next);
+      updateInventoryUI();
+    }
+    setAdminMessage(`MIRAGE Arm granted to ${user}.`);
+  }catch(e){
+    if(isPermErr(e))setAdminMessage('Permission denied by Firebase rules for cosmetic grant.',true);
+    else setAdminMessage(e.message||'Cosmetic grant failed.',true);
+  }
+}
 function updateSecretPanelStatus(){
   const card=document.getElementById('secret-card');
   if(card)card.classList.toggle('locked',!secretPanelGateOpen);
@@ -1638,6 +1723,7 @@ function applySecretCode(){
     rankAdminUnlocked=false;
     statsAdminUnlocked=false;
     timeStopUntil=0;timeStopTarget=-1;timeStopCaster=-1;
+    grantCosmetic('MIRAGE_ARM',{equip:true});
     input.value='';
     updateSecretPanelStatus();
     return;
@@ -1789,14 +1875,28 @@ function cosmeticById(id){
 }
 
 function saveAccessoriesProfile(){
+  const snapshot=snapshotAccessoriesState();
+  writeLocalAccessoriesState(snapshot);
   if(!currentUser||!fbInit())return;
-  const ownedArr=[...ownedCosmetics];
-  const equippedCopy={};
-  COSMETIC_SLOTS.forEach(slot=>{equippedCopy[slot]=equippedCosmetics[slot]||null;});
-  fbDb.ref(`${PROFILE_PATH}/${currentUser.uid}/accessories`).set({
-    owned:ownedArr,
-    equipped:equippedCopy
-  }).catch(()=>{});
+  fbDb.ref(`${PROFILE_PATH}/${currentUser.uid}/accessories`).set(snapshot).catch(()=>{});
+}
+
+function grantCosmetic(id,{equip=false}={}){
+  const cos=cosmeticById(id);
+  if(!cos)return false;
+  ownedCosmetics.add(id);
+  if(equip)equipCosmetics[cos.slot]=id;
+  saveAccessoriesProfile();
+  updateInventoryUI();
+  return true;
+}
+function buildGrantedAccessoriesState(raw,id,{equip=false}={}){
+  const cos=cosmeticById(id);
+  if(!cos)return sanitizeAccessoriesState(raw);
+  const next=sanitizeAccessoriesState(raw);
+  if(!next.owned.includes(id))next.owned.push(id);
+  if(equip)next.equipped[cos.slot]=id;
+  return sanitizeAccessoriesState(next);
 }
 
 function equipCosmetic(id){
@@ -1824,20 +1924,13 @@ function rollRandomCosmeticId(){
 }
 
 async function openCosmeticPack(){
-  if(!fbInit()){
-    setSecretMessage('Firebase not available for packs.',true);
-    return;
-  }
-  if(!currentUser){
-    setSecretMessage('Create an account to keep cosmetics.',true);
-    return;
-  }
   const id=rollRandomCosmeticId();
   const cos=cosmeticById(id);
   if(!cos)return;
   ownedCosmetics.add(id);
+  if(!equippedCosmetics[cos.slot])equippedCosmetics[cos.slot]=id;
   saveAccessoriesProfile();
-  setSecretMessage(`Pack opened: ${cos.name}`,false);
+  setSecretMessage(`Pack opened: ${cos.name}${currentUser?'':' (saved on this device)'}`,false);
   updateInventoryUI();
 }
 
@@ -1897,22 +1990,24 @@ function updateAccountUI(){
   }
 }
 async function loadCurrentProfile(uid=currentUser&&currentUser.uid){
-  if(!uid||!fbInit())return currentProfile=null;
+  if(!uid||!fbInit()){
+    currentProfile=null;
+    applyAccessoriesState(loadLocalAccessoriesState());
+    updateInventoryUI();
+    updateAccountUI();
+    return currentProfile;
+  }
   const snap=await fbDb.ref(`${PROFILE_PATH}/${uid}`).once('value');
   currentProfile=snap.exists()?snap.val():null;
   // Ghost UIDs automatically own all cosmetics
   if(currentUser && GHOST_UIDS.has(currentUser.uid)){
     ownedCosmetics=new Set(COSMETICS.map(c=>c.id));
   }else{
-    const acc=currentProfile&&currentProfile.accessories;
-    if(acc&&Array.isArray(acc.owned))ownedCosmetics=new Set(acc.owned);
-    else ownedCosmetics=new Set();
-    equippedCosmetics={shoes:null,armband:null,headband:null};
-    if(acc&&acc.equipped){
-      COSMETIC_SLOTS.forEach(slot=>{
-        const id=acc.equipped[slot];
-        if(id && COSMETICS.find(c=>c.id===id))equippedCosmetics[slot]=id;
-      });
+    const mergedAccessories=mergeAccessoriesStates(currentProfile&&currentProfile.accessories,loadLocalAccessoriesState());
+    applyAccessoriesState(mergedAccessories);
+    writeLocalAccessoriesState(mergedAccessories);
+    if(JSON.stringify(sanitizeAccessoriesState(currentProfile&&currentProfile.accessories))!==JSON.stringify(mergedAccessories)){
+      fbDb.ref(`${PROFILE_PATH}/${uid}/accessories`).set(mergedAccessories).catch(()=>{});
     }
   }
   updateInventoryUI();
@@ -1924,8 +2019,7 @@ async function handleAuthState(user){
   if(currentUser)await loadCurrentProfile(currentUser.uid);
   else{
     currentProfile=null;
-    ownedCosmetics=new Set();
-    equippedCosmetics={shoes:null,armband:null,headband:null};
+    applyAccessoriesState(loadLocalAccessoriesState());
     updateInventoryUI();
     updateAccountUI();
   }
@@ -3594,6 +3688,8 @@ function loop(ts){
 
 resize();
 loadSettings();
+applyAccessoriesState(loadLocalAccessoriesState());
+updateInventoryUI();
 updateAccountUI();
 updateSettingsUI();
 updateSecretPanelStatus();
