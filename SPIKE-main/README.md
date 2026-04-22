@@ -45,8 +45,3 @@ On phones and tablets, the game shows an on-screen control deck automatically:
 - Serve: serve when waiting
 - Bump / Set / Tip / Block: hold and release like keyboard controls
 - Spike: tap while airborne, or press just before jumping for a spike grace window
-
-## Notes
-
-- The bot uses built-in heuristics only. There is no training pipeline anymore.
-- Online multiplayer still uses Firebase Realtime Database rooms.
