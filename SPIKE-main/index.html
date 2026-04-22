@@ -3658,23 +3658,6 @@ function botInterceptPoint(ai,pred){
   }
   return{x:pred.x,y:fl()-PH,steps:pred.steps,urgent:false};
 }
-function botInterceptPoint(ai,pred){
-  const aiSpd=DIFF[diff].spd*botProfile().moveMul;
-  const aiCx=ai.x+PW/2;
-  const distToLanding=Math.abs(pred.x-aiCx);
-  const framesNeeded=distToLanding/Math.max(1,aiSpd);
-  if(framesNeeded>pred.steps*0.82){
-    // Can't reach landing in time — find earlier intercept
-    let px=ball.x,py=ball.y,pvx=ball.vx,pvy=ball.vy;
-    for(let st=1;st<=pred.steps;st++){
-      pvy+=G;px+=pvx;py+=pvy;
-      const dist=Math.abs(px-aiCx);
-      const canReach=dist<=aiSpd*st*1.05;
-      if(canReach&&py>nt()+10&&py<fl()-10)return{x:px,y:py,steps:st,urgent:true};
-    }
-  }
-  return{x:pred.x,y:fl()-PH,steps:pred.steps,urgent:false};
-}
 function predictBall(){
   let px=ball.x,py=ball.y,pvx=ball.vx,pvy=ball.vy,st=0;
   while(py<fl()-BR&&st<220){pvy+=G;px+=pvx;py+=pvy;st++;}
