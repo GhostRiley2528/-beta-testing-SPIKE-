@@ -2907,7 +2907,7 @@ async function refreshLeaderboard(){
   const meEl=document.getElementById('me-row');
   listEl.innerHTML='<div class="lb-empty">Loading leaderboard...</div>';
   try{
-    const snap=await fbDb.ref(PROFILE_PATH).once('value');
+    const snap=await fbDb.ref('publicProfiles').once('value');
     const rows=[];
     snap.forEach(child=>{
       const v=child.val();
@@ -4325,7 +4325,7 @@ function awardLocal(losingSide){
   if(score[0]>=WPWIN&&score[0]-score[1]>=2){
     sets[0]++;score[0]=0;score[1]=0;serving=0;
     over=sets[0]>=WSWIN;msg=over?`🏆 ${names[0]} WINS!`:`SET — ${names[0]}!`;
-  } else if(score[1]>=WPWIN&&score[1]-score[1-1]>=2){
+} else if(score[1]>=WPWIN&&score[1]-score[0]>=2){
     sets[1]++;score[0]=0;score[1]=0;serving=2;
     over=sets[1]>=WSWIN;msg=over?`🏆 ${names[1]} WINS!`:`SET — ${names[1]}!`;
   } else {
