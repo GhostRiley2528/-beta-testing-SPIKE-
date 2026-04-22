@@ -764,6 +764,26 @@ body.mobile-mode.mobile-landscape .mctl.wide{width:56px}
 </div>
 
 <script>
+let playerTendency={near:0,mid:0,deep:0,sampleFrame:0};
+function resetPlayerTendency(){playerTendency={near:0,mid:0,deep:0,sampleFrame:0};}
+function samplePlayerTendency(){
+  if(!PL[0])return;
+  playerTendency.sampleFrame++;
+  if(playerTendency.sampleFrame%4!==0)return;
+  const px=PL[0].x+PW/2;
+  const netX=nx();
+  if(px>netX-80)playerTendency.near++;
+  else if(px<netX*0.4)playerTendency.deep++;
+  else playerTendency.mid++;
+}
+function playerTendencyZone(){
+  const t=playerTendency;
+  const total=t.near+t.mid+t.deep;
+  if(total<6)return'mid';
+  if(t.near>=t.mid&&t.near>=t.deep)return'near';
+  if(t.deep>=t.mid&&t.deep>=t.near)return'deep';
+  return'mid';
+}
 const cv=document.getElementById('c'),cx=cv.getContext('2d');
 let W,H;
 function resize(){
@@ -3457,6 +3477,7 @@ function serveLocal(){
 }
 
 function physTick(){
+  if(phase==='playing'&&gmode==='ai')samplePlayerTendency();
   spikeCool=spikeCool.map(v=>Math.max(0,v-1));
   spikeGrace=spikeGrace.map(v=>Math.max(0,v-1));
   const tsActive=isTimeStopActive();
@@ -3620,6 +3641,40 @@ function gravTick(p,slot){
 }
 
 // ── AI — Decision Tree Learning ───────────────────────────────────────────
+function botInterceptPoint(ai,pred){
+  const aiSpd=DIFF[diff].spd*botProfile().moveMul;
+  const aiCx=ai.x+PW/2;
+  const distToLanding=Math.abs(pred.x-aiCx);
+  const framesNeeded=distToLanding/Math.max(1,aiSpd);
+  if(framesNeeded>pred.steps*0.82){
+    // Can't reach landing in time — find earlier intercept
+    let px=ball.x,py=ball.y,pvx=ball.vx,pvy=ball.vy;
+    for(let st=1;st<=pred.steps;st++){
+      pvy+=G;px+=pvx;py+=pvy;
+      const dist=Math.abs(px-aiCx);
+      const canReach=dist<=aiSpd*st*1.05;
+      if(canReach&&py>nt()+10&&py<fl()-10)return{x:px,y:py,steps:st,urgent:true};
+    }
+  }
+  return{x:pred.x,y:fl()-PH,steps:pred.steps,urgent:false};
+}
+function botInterceptPoint(ai,pred){
+  const aiSpd=DIFF[diff].spd*botProfile().moveMul;
+  const aiCx=ai.x+PW/2;
+  const distToLanding=Math.abs(pred.x-aiCx);
+  const framesNeeded=distToLanding/Math.max(1,aiSpd);
+  if(framesNeeded>pred.steps*0.82){
+    // Can't reach landing in time — find earlier intercept
+    let px=ball.x,py=ball.y,pvx=ball.vx,pvy=ball.vy;
+    for(let st=1;st<=pred.steps;st++){
+      pvy+=G;px+=pvx;py+=pvy;
+      const dist=Math.abs(px-aiCx);
+      const canReach=dist<=aiSpd*st*1.05;
+      if(canReach&&py>nt()+10&&py<fl()-10)return{x:px,y:py,steps:st,urgent:true};
+    }
+  }
+  return{x:pred.x,y:fl()-PH,steps:pred.steps,urgent:false};
+}
 function predictBall(){
   let px=ball.x,py=ball.y,pvx=ball.vx,pvy=ball.vy,st=0;
   while(py<fl()-BR&&st<220){pvy+=G;px+=pvx;py+=pvy;st++;}
@@ -3990,25 +4045,43 @@ function showBrainStatus(){
 function botTargetX(ai,pred,hx,hn,onSide){
   const profile=botProfile();
   const backLine=slotMaxX(2)-PW-16;
-  const center=nx()+W*0.18;
   const nearNet=nx()+58;
+  const intercept=botInterceptPoint(ai,pred);
+  const landX=intercept.x;
+  const urgentBoost=intercept.urgent?profile.receiveLead*0.55:0;
   const humanBias=hx<nx()*0.5?nx()+W*0.30:nx()+W*0.09;
   const err=(Math.random()-.5)*DIFF[diff].err*botErrorScale()*(hn===0?1:0.5);
-  const landing=Math.max(nearNet,Math.min(backLine,pred.x-PW/2));
+  const landing=Math.max(nearNet,Math.min(backLine,landX-PW/2));
+  const center=nx()+W*0.18;
   const defend=Math.max(nearNet,Math.min(backLine,center+(humanBias-center)*0.35));
   const receiveLead=ball.vx>0?profile.receiveLead:-profile.receiveLead*0.45;
 
   if(!onSide){
     const inboundToBot=(ball.vx>0.65||serving===0)&&pred.x>nx()+18;
-    if(inboundToBot)return Math.max(nearNet,Math.min(backLine,landing+err*0.35+receiveLead*0.28));
+    if(inboundToBot)return Math.max(nearNet,Math.min(backLine,landing+err*0.35+receiveLead*0.28+urgentBoost));
     return Math.max(nearNet,Math.min(backLine,defend+err));
   }
   if(hn===0){
-    return Math.max(nearNet,Math.min(backLine,landing+err+receiveLead));
+    return Math.max(nearNet,Math.min(backLine,landing+err+receiveLead+urgentBoost));
   }
   if(hn===1){
+    // Set quality — aim toward attack angle that opens most space
+    const playerMomentum=PL[0]?PL[0].vx||0:0;
+    const playerMovingToNet=playerMomentum>1.2;
+    const playerMovingBack=playerMomentum<-1.2;
+    const tendZone=playerTendencyZone();
+    let setTargetX;
+    if(tendZone==='near'||playerMovingToNet){
+      // Player crowds net — set deeper for back-corner attack
+      setTargetX=nx()+W*0.28;
+    } else if(tendZone==='deep'||playerMovingBack){
+      // Player hangs back — set tight to net for sharp angle
+      setTargetX=nx()+W*0.10;
+    } else {
+      setTargetX=nx()+W*0.18;
+    }
     if(ball.y>fl()-92)return Math.max(nearNet,Math.min(backLine,landing+err*0.35));
-    return Math.max(nearNet,Math.min(backLine,center+(profile.key==='easy'?10:4)+err*0.35));
+    return Math.max(nearNet,Math.min(backLine,setTargetX+err*0.35));
   }
   return Math.max(nearNet,Math.min(backLine,landing*(profile.key==='hard'?0.78:0.74)+humanBias*(profile.key==='hard'?0.32:0.26)+err*0.26));
 }
@@ -4042,17 +4115,35 @@ function chooseBotSkill(hn,ai,hx){
   const profile=botProfile();
   const player=PL[0];
   const px=player?player.x+PW/2:nx()*0.25;
-  const playerNearNet=px>nx()-95;
-  const playerDeep=px<nx()*0.33;
-  const ballHigh=ball.y<fl()-135;
+  const playerNearNet=px>nx()-80;
+  const playerDeep=px<nx()*0.38;
+  const playerCentered=!playerNearNet&&!playerDeep;
   const ballNearNet=ball.x<nx()+82;
-  if(hn===0){
-    return 'bump';
-  }
+  if(hn===0)return'bump';
   if(hn===1){
-    if(ball.y>fl()-84)return 'bump';
-    return 'set';
+    if(ball.y>fl()-84)return'bump';
+    return'set';
   }
+  if(hn>=2){
+    // Easy: mostly random
+    if(profile.key==='easy'){
+      return Math.random()<0.18?'tip':'spike';
+    }
+    // Med: read player 50% of the time
+    const doRead=profile.key==='hard'||Math.random()<0.5;
+    if(!doRead)return Math.random()<profile.tipChance?'tip':'spike';
+    const tendZone=playerTendencyZone();
+    const effectiveNear=playerNearNet||(tendZone==='near');
+    const effectiveDeep=playerDeep||(tendZone==='deep');
+    if(effectiveDeep)return'tip'; // Player deep — tip short
+    if(effectiveNear)return'spike'; // Player at net — drive deep
+    // Centered — go to seam, occasionally tip
+    return Math.random()<(profile.key==='hard'?0.12:0.22)?'tip':'spike';
+  }
+  if(!isAirborne(ai))return playerNearNet&&Math.random()<profile.tipChance?'tip':'bump';
+  if(playerNearNet&&ballNearNet)return'tip';
+  return'spike';
+}
   if(hn>=2)return Math.random()<profile.tipChance*0.75?'tip':'spike';
   if(!isAirborne(ai))return playerNearNet&&!playerDeep&&Math.random()<profile.tipChance?'tip':'bump';
   if(playerNearNet&&ballNearNet)return 'tip';
@@ -4062,19 +4153,23 @@ function chooseBotSkill(hn,ai,hx){
 function botAttackNudge(skill,hx){
   const profile=botProfile();
   const playerLeft=hx<nx()*0.5;
-  const deepCorner=playerLeft?nx()-NW/2-BR-36:24;
-  const midLane=playerLeft?nx()-NW/2-72:66;
+  const tendZone=playerTendencyZone();
+  // Aim away from where player tends to be
+  const aimsLeft=tendZone==='near'
+    ?(playerLeft?false:true)  // player near net on their side — go opposite
+    :(playerLeft?true:false);
+  const deepCorner=aimsLeft?nx()-NW/2-BR-36:24;
+  const midLane=aimsLeft?nx()-NW/2-72:66;
   const targetX=(profile.key==='hard'&&Math.random()<0.55)?deepCorner:midLane;
   if(skill==='tip'){
-    const soft=profile.tipNudge;
-    ball.vx+=Math.sign(targetX-ball.x)*soft;
+    ball.vx+=Math.sign(targetX-ball.x)*profile.tipNudge;
     ball.vy-=profile.key==='hard'?0.5:profile.key==='med'?0.3:0.15;
     return;
   }
   if(skill!=='spike')return;
-  const hardNudge=profile.spikeNudge;
-  ball.vx+=Math.sign(targetX-ball.x)*hardNudge;
-  if(profile.key!=='easy'&&Math.abs(hx-nx()*0.5)<70)ball.vx+=playerLeft?2.2:-2.2;
+  ball.vx+=Math.sign(targetX-ball.x)*profile.spikeNudge;
+  if(profile.key!=='easy'&&Math.abs(hx-nx()*0.5)<70)
+    ball.vx+=aimsLeft?-2.2:2.2;
 }
 function maybeTriggerBotTrick(skill){
   const profile=botProfile();
@@ -4089,14 +4184,48 @@ function botServeLocal(){
   if(gmode!=='ai'||phase!=='waiting'||serving!==2)return;
   const ai=PL[2];if(!ai)return;
   const profile=botProfile();
-  const aimX=humanX()<nx()*0.34?nx()-NW/2-82:nx()-NW/2-40;
+  // Three serve types weighted by difficulty
+  const r=Math.random();
+  let serveType;
+  if(profile.key==='easy'){
+    serveType=r<0.55?'floaty':r<0.82?'drive':'seam';
+  } else if(profile.key==='med'){
+    serveType=r<0.28?'floaty':r<0.62?'drive':'seam';
+  } else {
+    serveType=r<0.12?'floaty':r<0.48?'drive':'seam';
+  }
   phase='playing';hideOv();setHm('');
   lastHitSlot=-1;lastHitSide=-1;sideHits=[0,0];rallyHits=0;
   ball.x=Math.max(nx()+48,ai.x+PW/2-6);
   ball.y=Math.min(fl()-132,ai.y+8);
-  ball.vx=-(profile.key==='hard'?5.9:profile.key==='med'?5.5:5.1);
-  ball.vx+=Math.sign(aimX-ball.x)*(profile.key==='hard'?0.65:profile.key==='med'?0.45:0.24);
-  ball.vy=-(profile.key==='hard'?14.8:profile.key==='med'?14.3:13.9);
+  const jitter=(Math.random()-.5)*0.28;
+  if(serveType==='floaty'){
+    // Short floaty — lands just past net on player side
+    const shortTarget=nx()-NW/2-62+(Math.random()-.5)*38;
+    const sdx=shortTarget-ball.x;
+    ball.vx=-(3.2+Math.random()*0.6)+jitter;
+    ball.vy=-(16.2+Math.random()*0.8);
+    ball.vx+=Math.sign(sdx)*0.18;
+  } else if(serveType==='drive'){
+    // Hard flat drive — back corner
+    const backCorner=humanX()<nx()*0.5?nx()-NW/2-BR-40:28;
+    const ddx=backCorner-ball.x;
+    ball.vx=-(profile.key==='hard'?6.8:6.2)+jitter;
+    ball.vy=-(13.2+Math.random()*0.6);
+    ball.vx+=Math.sign(ddx)*(profile.key==='hard'?0.72:0.52);
+  } else {
+    // Seam serve — between player's likely zones based on tendency
+    const tendZone=playerTendencyZone();
+    const seamTarget=tendZone==='near'
+      ?nx()-NW/2-90  // They hang near net — serve deep
+      :tendZone==='deep'
+        ?nx()-NW/2-48  // They hang deep — serve short seam
+        :nx()-NW/2-68; // Centered — go to seam
+    const sdx=seamTarget-ball.x;
+    ball.vx=-(profile.key==='hard'?6.4:5.8)+jitter;
+    ball.vy=-(14.0+Math.random()*0.7);
+    ball.vx+=Math.sign(sdx)*(profile.key==='hard'?0.62:0.44);
+  }
   ball.spin=ball.vx*0.05;
   botServeGraceUntil=Date.now()+900;
   aiState.awaitServeCross=true;
@@ -4140,16 +4269,29 @@ function aiTick(){
 
   if(aiState.blockCool>0)aiState.blockCool--;
   if(ai.onGround&&aiState.blockCool===0&&!serveLock){
-    const incomingSpike=ball.vx>2.1&&ball.x>nx()-32&&ball.x<nx()+178&&ball.y<fl()-28;
-    const playerAttackWindow=PL[0]&&(!PL[0].onGround||ball.y<fl()-124)&&ball.x>nx()-116&&ball.x<nx()+126;
-    const nearNet=Math.abs((ai.x+PW/2)-nx())<136;
-    if((incomingSpike||playerAttackWindow)&&nearNet&&Math.random()<profile.blockChance){
-      ai.vy=JV*(1.03+profile.jumpBias*0.42);
-      ai.onGround=false;
-      aiState.blocking=true;blockingSlots.add(2);updateSkillBar();
-      setTimeout(()=>{aiState.blocking=false;blockingSlots.delete(2);aiState.blockCool=58;updateSkillBar();},profile.blockHold);
-    }
+  const player=PL[0];
+  const playerAirborne=player&&!player.onGround;
+  const playerRisingFast=player&&player.vy<-4.2;
+  const playerNearNet=player&&(player.x+PW/2)>nx()-130;
+  // Estimate frames until player contacts ball
+  const ballAbovePlayer=ball.y<(player?player.y:fl())-18;
+  const framesUntilContact=ballAbovePlayer&&playerAirborne
+    ?Math.max(1,Math.abs(ball.y-(player?player.y:fl()))/Math.max(1,Math.abs(ball.vy)+0.1))
+    :999;
+  // Bot jump takes ~14 frames to reach peak (JV/-G)
+  const botJumpFrames=Math.abs(JV/G);
+  const timingOffset=profile.key==='hard'?0.5:profile.key==='med'?(Math.random()*3-1):((Math.random()*8)-4);
+  const goodBlockWindow=Math.abs(framesUntilContact-botJumpFrames+timingOffset)<4.5;
+  const nearNet=Math.abs((ai.x+PW/2)-nx())<136;
+  const incomingSpike=ball.vx>2.1&&ball.x>nx()-32&&ball.x<nx()+178&&ball.y<fl()-28;
+  const shouldBlock=(incomingSpike||playerRisingFast)&&playerNearNet&&nearNet&&goodBlockWindow;
+  if(shouldBlock&&Math.random()<profile.blockChance){
+    ai.vy=JV*(1.03+profile.jumpBias*0.42);
+    ai.onGround=false;
+    aiState.blocking=true;blockingSlots.add(2);updateSkillBar();
+    setTimeout(()=>{aiState.blocking=false;blockingSlots.delete(2);aiState.blockCool=58;updateSkillBar();},profile.blockHold);
   }
+}
 
   let tx=serveLock
     ?Math.max(nx()+86,Math.min(slotMaxX(2)-PW,nx()+W*0.18))
